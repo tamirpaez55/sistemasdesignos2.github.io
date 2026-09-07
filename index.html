@@ -42,10 +42,11 @@ const PAL = {
 };
 
 // Paleta original colorida exclusiva para los botones del menú principal
+// Paleta unificada para el Menú Principal
 const PAL_MENU = {
-  pasado:   ['#196C7E', '#57C8D4', '#DA6A2D'],
-  presente: ['#8E34C3', '#C691FF', '#FFBD42'],
-  futuro:   ['#261821', '#991212', '#BC4E44']
+  pasado:   '#57C8D4', // Cian brillante
+  presente: '#8E34C3', // Violeta
+  futuro:   '#BC4E44'  // Rojo brillante para los bordes y el título
 };
 
 const CONCEPTS = [
@@ -658,21 +659,23 @@ MODULES.identidad = {
   draw(){
     drawDynamicBackground();
 
-    // Anillo contenedor exterior
-    noFill(); stroke(110); 
-    strokeWeight(6);
+    // 0. Eliminamos los trazos (stroke) de todo el módulo, ahora todo es relleno
+    noStroke(); 
+
+    // 1. Círculo contenedor exterior (Fondo oscuro, se dibuja primero)
+    fill(110); 
     circle(this.center.x, this.center.y, this.outerR*2);
 
-    // Anillos internos
+    // 2. Anillos internos (Se dibujan iterando hacia atrás, de MAYOR tamaño a MENOR tamaño)
     const ringColors = [255, 190, 140];
-    for (let i=0;i<this.rings.length;i++){
+    for (let i = this.rings.length - 1; i >= 0; i--){
       const ring = this.rings[i];
-      stroke(ringColors[i]); 
-      strokeWeight(6);
+      fill(ringColors[i]); 
       circle(this.center.x+ring.ox, this.center.y+ring.oy, ring.r*2);
     }
 
-    noStroke(); fill(PAL.presente[0]);
+    // 3. Círculo protagonista (el que agarra el usuario, queda arriba de todo)
+    fill(PAL.presente[0]);
     circle(this.circle.x, this.circle.y, this.circle.r*2);
   }
 };
@@ -1452,7 +1455,6 @@ function buildMenuLayout(){
 
 function drawMenu(){
   // --- RESET GLOBAL DE ESTILOS ---
-  // Limpiamos cualquier regla que haya quedado "sucia" del módulo anterior
   rectMode(CORNER);
   imageMode(CORNER);
   
@@ -1463,16 +1465,17 @@ function drawMenu(){
   const colW = W/3;
   noStroke();
   
+  // 1. Dibuja los títulos unificados
   subs.forEach(([sub,label], i)=>{
-    fill(PAL_MENU[sub][0]);
+    fill(PAL_MENU[sub]); 
     textSize(40);
     text(label, colW*i + colW/2, 140);
   });
 
   for (const r of menuRects){
     const mod = MODULES[r.id];
-    const idx = menuRects.filter(m=>m.sub===r.sub).indexOf(r);
-    const menuColor = PAL_MENU[r.sub][idx % PAL_MENU[r.sub].length];
+    // 2. Dibuja el borde con el color unificado (sin rotar)
+    const menuColor = PAL_MENU[r.sub]; 
 
     if (mod) {
       currentDrawingModule = r.id;
@@ -1485,7 +1488,6 @@ function drawMenu(){
       drawingContext.save();
       fill(255);
       noStroke();
-      // Aseguramos que la máscara de recorte se dibuje desde la esquina
       rectMode(CORNER); 
       rect(0, 0, W, H, 80); 
       drawingContext.clip();
