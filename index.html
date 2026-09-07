@@ -36,9 +36,9 @@ const H = 1080;
 
 // Paleta en escala de grises exclusiva para las figuras de los módulos
 const PAL = {
-  pasado:   ['#8C8C8C', '#FFFFFF', '#000000'], // Gris medio, Blanco, Negro
-  presente: ['#B3B3B3', '#FFFFFF', '#4D4D4D'], // Gris claro, Blanco, Gris oscuro
-  futuro:   ['#CCCCCC', '#FFFFFF', '#666666']  // Gris muy claro, Blanco, Gris intermedio
+  pasado:   ['#8C8C8C', '#FFFFFF', '#000000'], 
+  presente: ['#B3B3B3', '#FFFFFF', '#4D4D4D'], 
+  futuro:   ['#CCCCCC', '#FFFFFF', '#666666']  
 };
 
 // Paleta original colorida exclusiva para los botones del menú principal
@@ -92,15 +92,26 @@ let menuRects = [];
 let backBtn = { x:90, y:90, r:85 }; 
 let bgImages = {}; 
 
+let currentDrawingModule = 'menu';
+let activeMenuModule = null;
+let lastTapTime = 0;
+let lastTapId = null;
+
 function goTo(id){
+  // Soltamos interacción pendiente si saltamos a pantalla completa
+  if (activeMenuModule && MODULES[activeMenuModule] && MODULES[activeMenuModule].release) {
+    MODULES[activeMenuModule].release();
+  }
+  activeMenuModule = null;
   screenState = id;
   if (MODULES[id] && MODULES[id].reset) MODULES[id].reset();
 }
+
 function goMenu(){ screenState = 'menu'; }
 
 function drawDynamicBackground() {
-  if (bgImages[screenState]) {
-    image(bgImages[screenState], 0, 0, W, H);
+  if (bgImages[currentDrawingModule]) {
+    image(bgImages[currentDrawingModule], 0, 0, W, H);
   } else {
     background(20); 
   }
@@ -109,21 +120,60 @@ function drawDynamicBackground() {
 /* ============================ 4. ENTRADA (INPUT) ============================ */
 function handlePress(x,y){
   if (x===undefined){ x = mouseX; y = mouseY; }
+  let now = millis();
+
   if (screenState === 'menu'){
     for (const r of menuRects){
-      if (x > r.x && x < r.x+r.w && y > r.y && y < r.y+r.h) goTo(r.id);
+      if (x > r.x && x < r.x+r.w && y > r.y && y < r.y+r.h) {
+        
+        // Detección de Doble Clic / Doble Toque (350 ms de margen)
+        if (now - lastTapTime < 350 && lastTapId === r.id) {
+          goTo(r.id);
+          return;
+        }
+        lastTapTime = now;
+        lastTapId = r.id;
+
+        // Si es un toque simple, interactuamos con la miniatura
+        activeMenuModule = r.id;
+        let vx = (x - r.x) / r.s; // Traducimos la escala
+        let vy = (y - r.y) / r.s;
+        if (MODULES[r.id] && MODULES[r.id].press) MODULES[r.id].press(vx, vy);
+        return;
+      }
     }
   } else {
     if (dist(x,y, backBtn.x, backBtn.y) < backBtn.r){ goMenu(); return; }
     if (MODULES[screenState] && MODULES[screenState].press) MODULES[screenState].press(x,y);
   }
 }
+
 function handleDrag(x,y){
   if (x===undefined){ x = mouseX; y = mouseY; }
-  if (screenState !== 'menu' && MODULES[screenState] && MODULES[screenState].drag) MODULES[screenState].drag(x,y);
+  
+  if (screenState === 'menu'){
+    if (activeMenuModule) {
+      let r = menuRects.find(m => m.id === activeMenuModule);
+      if (r) {
+        let vx = (x - r.x) / r.s;
+        let vy = (y - r.y) / r.s;
+        if (MODULES[r.id] && MODULES[r.id].drag) MODULES[r.id].drag(vx, vy);
+      }
+    }
+  } else {
+    if (MODULES[screenState] && MODULES[screenState].drag) MODULES[screenState].drag(x,y);
+  }
 }
+
 function handleRelease(){
-  if (screenState !== 'menu' && MODULES[screenState] && MODULES[screenState].release) MODULES[screenState].release();
+  if (screenState === 'menu'){
+    if (activeMenuModule) {
+      if (MODULES[activeMenuModule] && MODULES[activeMenuModule].release) MODULES[activeMenuModule].release();
+      activeMenuModule = null;
+    }
+  } else {
+    if (MODULES[screenState] && MODULES[screenState].release) MODULES[screenState].release();
+  }
 }
 
 function mousePressed(){ handlePress(); }
@@ -227,32 +277,38 @@ MODULES.memoria = {
 
 /* ---------- PASADO: HERENCIA ---------- */
 MODULES.herencia = {
-  cols: [],
-  hybrids: {},
-  baseSize: 130, spacingY: 195, topY: 220, margin: 24, 
-  maxPerCycle: 4,     
-  dragThreshold: 60,  
-  maxDragRange: 380,  
-  activeDrag: null,   
+  cols: [], hybrids: {},
+  baseSize: 130, spacingY: 195, topY: 220, margin: 24,
+  maxPerCycle: 4, dragThreshold: 60, maxDragRange: 450,
+  activeDrag: null,
 
   reset(){
-    const colors = [PAL.pasado[0], PAL.pasado[1], PAL.pasado[2]]; 
+    const colors = [PAL.pasado[0], PAL.pasado[1], PAL.pasado[2]];
     this.cols = colors.map((colorHex, i) => ({
       colorHex,
-      squares: [{ x: this.colX(i), y: this.topY, size: this.baseSize, col: color(colorHex) }]
+      squares: [{ x: this.colX(i), y: this.topY, w: this.baseSize, h: this.baseSize, rot: 0, col: color(colorHex) }]
     }));
     this.hybrids = {};
     this.activeDrag = null;
   },
 
-  colX(i){ const colW = W/3; return colW*i + colW/2; },
+  colX(i){ return (W/3)*i + (W/3)/2; },
   colFromX(x){ return constrain(Math.floor(x / (W/3)), 0, 2); },
   getSlot(i, idx){ return { x: this.colX(i), y: this.topY + idx*this.spacingY }; },
   hybridKey(a,b){ return [a,b].sort().join('-'); },
 
-  sizeFromDelta(deltaY){
-    const t = constrain((deltaY - this.dragThreshold) / this.maxDragRange, 0, 1);
-    return lerp(this.baseSize*0.85, this.baseSize*1.25, t);
+  calcMutation(startX, startY, curX, curY){
+    const deltaY = max(curY - startY, 0);
+    const deltaX = curX - startX;
+
+    const t = constrain(deltaY / this.maxDragRange, 0, 1);
+    const baseScale = lerp(0.85, 1.5, t); 
+
+    const stretch = constrain(abs(deltaX)/300, 0, 1);
+    const w = this.baseSize * baseScale * (1 + stretch * (deltaX > 0 ? 0.4 : -0.2));
+    const h = this.baseSize * baseScale * (1 + stretch * (deltaX > 0 ? -0.2 : 0.4));
+    
+    return { w: max(w, 20), h: max(h, 20), rot: 0 };
   },
 
   colorFromCols(startCol, endCol){
@@ -261,66 +317,53 @@ MODULES.herencia = {
     return lerpColor(c1, c2, startCol === endCol ? 1 : 0.5);
   },
 
-  press(x,y){
-    this.activeDrag = { startCol: this.colFromX(x), startX:x, startY:y, curX:x, curY:y };
-  },
-  drag(x,y){
-    if (!this.activeDrag) return;
-    this.activeDrag.curX = x; this.activeDrag.curY = y;
-  },
+  press(x,y){ this.activeDrag = { startCol: this.colFromX(x), startX:x, startY:y, curX:x, curY:y }; },
+  drag(x,y){ if (this.activeDrag) { this.activeDrag.curX = x; this.activeDrag.curY = y; } },
+  
   release(){
     if (!this.activeDrag) return;
     const d = this.activeDrag;
-    const deltaY = d.curY - d.startY;
     const endCol = this.colFromX(d.curX);
-    if (endCol !== d.startCol){
-      this.addSquare(d.startCol, endCol, max(deltaY,0));
-    } else if (deltaY > this.dragThreshold){
-      this.addSquare(d.startCol, endCol, deltaY);
+    if (endCol !== d.startCol || (d.curY - d.startY) > this.dragThreshold){
+      this.addDescendant(d.startCol, endCol, d.startX, d.startY, d.curX, d.curY);
     }
     this.activeDrag = null;
   },
 
-  addSquare(startCol, endCol, deltaY){
-    const size = this.sizeFromDelta(deltaY);
+  addDescendant(startCol, endCol, startX, startY, curX, curY){
+    const mut = this.calcMutation(startX, startY, curX, curY);
+    const finalColor = this.colorFromCols(startCol, endCol);
+
+    let targetList;
     if (startCol === endCol){
-      const dest = this.cols[endCol];
-      const mother = dest.squares[0];
-      dest.squares.push({ x: mother.x, y: mother.y, size, col: color(dest.colorHex) });
-      if (dest.squares.length % this.maxPerCycle === 0){
-        const last = dest.squares.pop();
-        dest.squares.unshift(last);
-      }
+      targetList = this.cols[endCol].squares;
     } else {
       const key = this.hybridKey(startCol, endCol);
       if (!this.hybrids[key]) this.hybrids[key] = { x: (this.colX(startCol)+this.colX(endCol))/2, squares: [] };
-      const hy = this.hybrids[key];
-      const finalColor = this.colorFromCols(startCol, endCol);
-      const idx = hy.squares.length; 
-      const slot = { x: hy.x, y: this.topY + idx*this.spacingY };
-      hy.squares.push({ x: slot.x, y: slot.y, size, col: finalColor });
-      if (hy.squares.length % this.maxPerCycle === 0){
-        const last = hy.squares.pop();
-        hy.squares.unshift(last);
-      }
+      targetList = this.hybrids[key].squares;
     }
+
+    targetList.push({ x: curX, y: curY, w: mut.w, h: mut.h, rot: mut.rot, col: finalColor });
+
+    if (startCol === endCol && targetList.length > this.maxPerCycle) targetList.splice(1, 1);
+    if (startCol !== endCol && targetList.length > this.maxPerCycle) targetList.shift();
   },
 
   update(){
     this.cols.forEach((col, i) => {
-      for (let idx=0; idx<col.squares.length; idx++){
+      for (let idx=1; idx<col.squares.length; idx++){ 
         const target = this.getSlot(i, idx);
         const q = col.squares[idx];
-        q.x = lerp(q.x, target.x, 0.18);
-        q.y = lerp(q.y, target.y, 0.18);
+        q.x = lerp(q.x, target.x, 0.12);
+        q.y = lerp(q.y, target.y, 0.12);
       }
     });
     Object.values(this.hybrids).forEach((hy) => {
       for (let idx=0; idx<hy.squares.length; idx++){
         const target = { x: hy.x, y: this.topY + idx*this.spacingY };
         const q = hy.squares[idx];
-        q.x = lerp(q.x, target.x, 0.18);
-        q.y = lerp(q.y, target.y, 0.18);
+        q.x = lerp(q.x, target.x, 0.12);
+        q.y = lerp(q.y, target.y, 0.12);
       }
     });
   },
@@ -329,40 +372,61 @@ MODULES.herencia = {
     drawDynamicBackground();
     rectMode(CENTER);
 
+    this.cols.forEach((col) => {
+      for (let idx=col.squares.length-1; idx>=0; idx--) this.drawShape(col.squares[idx], idx === 0);
+    });
+    Object.values(this.hybrids).forEach((hy) => {
+      for (let idx=hy.squares.length-1; idx>=0; idx--) this.drawShape(hy.squares[idx], false);
+    });
+
     if (this.activeDrag){
       const d = this.activeDrag;
-      const deltaY = d.curY - d.startY;
       const endColLive = this.colFromX(d.curX);
-      const liveSize = this.sizeFromDelta(max(deltaY,0));
+      const mutLive = this.calcMutation(d.startX, d.startY, d.curX, d.curY);
       const liveColor = this.colorFromCols(d.startCol, endColLive);
-      noStroke();
-      liveColor.setAlpha(120);
-      fill(liveColor);
-      rect(d.curX, d.curY, liveSize*0.8, liveSize*0.8);
-    }
 
-    this.cols.forEach((col) => {
-      noStroke();
-      for (let idx=col.squares.length-1; idx>=0; idx--){
-        const q = col.squares[idx];
-        fill(q.col);
-        this.drawSquareWithMargin(q);
+      let previewX, previewY;
+      if (d.startCol === endColLive){
+        previewX = this.colX(endColLive);
+        const list = this.cols[endColLive].squares;
+        // Al quitar el "- 1", permitimos que previsualice en el espacio extra de abajo
+        const nextIdx = min(list.length, this.maxPerCycle); 
+        previewY = this.topY + nextIdx*this.spacingY;
+      } else {
+        previewX = (this.colX(d.startCol) + this.colX(endColLive))/2;
+        const key = this.hybridKey(d.startCol, endColLive);
+        const list = this.hybrids[key] ? this.hybrids[key].squares : [];
+        const nextIdx = min(list.length, this.maxPerCycle); 
+        previewY = this.topY + nextIdx*this.spacingY;
       }
-    });
-    
-    Object.values(this.hybrids).forEach((hy) => {
+
       noStroke();
-      for (let idx=hy.squares.length-1; idx>=0; idx--){
-        const q = hy.squares[idx];
-        fill(q.col);
-        this.drawSquareWithMargin(q);
-      }
-    });
+      liveColor.setAlpha(150);
+      push();
+      translate(previewX, previewY);
+      rotate(mutLive.rot);
+      fill(liveColor);
+      rect(0, 0, max(mutLive.w - this.margin, 10), max(mutLive.h - this.margin, 10)); 
+      pop();
+
+      fill(255, 120);
+      circle(d.curX, d.curY, 18);
+    }
   },
 
-  drawSquareWithMargin(q){
-    const s = max(q.size - this.margin, 20);
-    rect(q.x, q.y, s, s);
+  drawShape(q, isMother){
+    push();
+    translate(q.x, q.y);
+    rotate(q.rot);
+    noStroke();
+    fill(q.col);
+    
+    if (isMother) {
+      rect(0, 0, q.w, q.h);
+    } else {
+      rect(0, 0, max(q.w - this.margin, 10), max(q.h - this.margin, 10));
+    }
+    pop();
   }
 };
 
@@ -371,13 +435,14 @@ MODULES.caducidad = {
   pos: { x:0, y:0 },
   decayProgress: 0,   
   pressing: false,
-  breakPoint: 0.55,   
+  breakPoint: 0.65,      
   diameter: 260,
-  growMs: 5500,       
+  growMs: 8500,          
   shrinkMs: 8000,     
   fadeMs: 2200,       
   fragmentOffsets: null, 
-  fadeState: null,       
+  fadeState: null,
+  noiseSeedOffset: 0,    
 
   reset(){
     this.pos = { x: W/2, y: H/2 };
@@ -385,6 +450,7 @@ MODULES.caducidad = {
     this.pressing = false;
     this.fragmentOffsets = null;
     this.fadeState = null;
+    this.noiseSeedOffset = random(1000);
   },
 
   press(x,y){ this.pressing = true; this.pos = {x,y}; },
@@ -392,23 +458,24 @@ MODULES.caducidad = {
   release(){ this.pressing = false; },
 
   generateFragments(){
-    const n = Math.floor(random(6,9));
+    const n = Math.floor(random(8, 14)); 
     this.fragmentOffsets = [];
     for (let i=0; i<n; i++){
       this.fragmentOffsets.push({
         angle: random(TWO_PI),          
-        angSpeed: random(0.4,1.1) * (random()<0.5 ? -1 : 1), 
-        targetR: random(70,150),        
+        angSpeed: random(0.2, 1.5) * (random()<0.5 ? -1 : 1), 
+        targetR: random(50, 180),        
         r: 0,                           
-        size: random(0.28, 0.45) * this.diameter 
+        size: random(0.15, 0.35) * this.diameter 
       });
     }
   },
 
   rotateFragments(){
     for (const f of this.fragmentOffsets){
-      f.angle += f.angSpeed * (deltaTime/1000);
-      f.r = lerp(f.r, f.targetR, 0.06);
+      const speedMult = map(this.decayProgress, this.breakPoint, 1, 1, 2.8);
+      f.angle += f.angSpeed * speedMult * (deltaTime/1000);
+      f.r = lerp(f.r, f.targetR, 0.04);
     }
   },
 
@@ -431,37 +498,75 @@ MODULES.caducidad = {
     if (this.fragmentOffsets) this.rotateFragments();
 
     if (this.decayProgress >= 1 && !this.fadeState) this.fadeState = { t:0 };
+
+    this.noiseSeedOffset += 0.05; 
   },
 
   draw(){
     drawDynamicBackground();
+    
     noStroke();
-    const baseColor = color(PAL.pasado[0]); 
-    const grayColor = color(170);
+    const baseColor = color(255); 
+    const deadColor = color(255); 
 
     if (this.fadeState){
-      const fadeT = constrain(this.fadeState.t / this.fadeMs, 0, 1);
-      const c = color(170); c.setAlpha(255*(1-fadeT));
-      fill(c);
+      // Los escombros se mantienen orbitando al 20% de opacidad durante la pausa final
+      deadColor.setAlpha(51); 
+      fill(deadColor);
       for (const f of this.fragmentOffsets){
-        const shrunkSize = f.size * (1-fadeT); 
-        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, shrunkSize);
+        const finalSize = f.size * 0.3; 
+        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, finalSize);
       }
       return;
     }
 
+    let currentAlpha;
+    const opBreak = 6000 / this.growMs; 
+    if (this.decayProgress <= opBreak) {
+      currentAlpha = map(this.decayProgress, 0, opBreak, 255, 102); 
+    } else {
+      // El límite inferior ahora es 51 (20% de 255)
+      currentAlpha = map(this.decayProgress, opBreak, 1, 102, 51);   
+    }
+
     if (this.decayProgress < this.breakPoint || !this.fragmentOffsets){
       const t = constrain(this.decayProgress / this.breakPoint, 0, 1);
-      const c = color(baseColor); c.setAlpha(lerp(255,90,t));
+      
+      const jitter = t > 0.1 ? random(-t*15, t*15) : 0;
+      
+      const c = lerpColor(baseColor, deadColor, t * 0.7);
+      c.setAlpha(currentAlpha);
       fill(c);
-      circle(this.pos.x, this.pos.y, this.diameter);
+
+      push();
+      translate(this.pos.x + jitter, this.pos.y + jitter);
+
+      if (t > 0.25) {
+        beginShape();
+        const res = 45; 
+        for (let i = 0; i < res; i++) {
+          const ang = map(i, 0, res, 0, TWO_PI);
+          const defAmount = map(t, 0.25, 1, 0, 60); 
+          const noiseVal = noise(cos(ang)*1.5 + this.noiseSeedOffset, sin(ang)*1.5 + this.noiseSeedOffset);
+          const r = (this.diameter/2) - (noiseVal * defAmount);
+          vertex(cos(ang) * r, sin(ang) * r);
+        }
+        endShape(CLOSE);
+      } else {
+        circle(0, 0, this.diameter); 
+      }
+      pop();
+
     } else {
       const t = constrain((this.decayProgress - this.breakPoint) / (1 - this.breakPoint), 0, 1);
-      const mixed = lerpColor(baseColor, grayColor, t);
-      mixed.setAlpha(lerp(90,255,t));
+      
+      const mixed = lerpColor(baseColor, deadColor, 0.7 + (t*0.3));
+      mixed.setAlpha(currentAlpha); 
       fill(mixed);
+      
       for (const f of this.fragmentOffsets){
-        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, f.size);
+        const currentSize = f.size * lerp(1, 0.3, t);
+        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, currentSize);
       }
     }
   }
@@ -553,12 +658,16 @@ MODULES.identidad = {
   draw(){
     drawDynamicBackground();
 
-    noFill(); stroke(PAL.presente[2]); strokeWeight(6);
+    // Anillo contenedor exterior
+    noFill(); stroke(110); 
+    strokeWeight(6);
     circle(this.center.x, this.center.y, this.outerR*2);
 
+    // Anillos internos
+    const ringColors = [255, 190, 140];
     for (let i=0;i<this.rings.length;i++){
       const ring = this.rings[i];
-      stroke(PAL.presente[i % PAL.presente.length]); 
+      stroke(ringColors[i]); 
       strokeWeight(6);
       circle(this.center.x+ring.ox, this.center.y+ring.oy, ring.r*2);
     }
@@ -728,23 +837,19 @@ MODULES.colaboracion = {
   
   reset(){
     this.circles = [];
-    for (let i=0;i<this.n;i++){
-      const c = this.spawnCircle(random()<0.5 ? 1 : -1);
-      c.x = random(c.r, W-c.r);
-      this.circles.push(c);
+    for (let i=0; i<this.n; i++){
+      const r = random(55, 75); // Tamaño base
+      this.circles.push({
+        id: i,
+        x: random(r, W-r), y: random(r, H-r),
+        r: r,
+        vx: random(-5, 5), vy: random(-5, 5),
+        colorIdx: floor(random(PAL.presente.length)),
+        anchor: null, offX:0, offY:0,
+        netSize: 1 // Con cuántos está conectado
+      });
     }
     this.held = null;
-  },
-  
-  spawnCircle(dir){
-    const r = random(60,90);
-    return {
-      x: dir>0 ? -r : W+r, y: random(150,H-150),
-      r, 
-      vx: dir*random(0.8, 1.5), vy: random(-0.3, 0.3),
-      colorIdx: floor(random(PAL.presente.length)),
-      anchor: null, offX:0, offY:0
-    };
   },
   
   root(c){ 
@@ -756,7 +861,7 @@ MODULES.colaboracion = {
     let best=null, bd=Infinity;
     for (const c of this.circles){
       const d = dist(x,y,c.x,c.y);
-      if (d < c.r+60 && d < bd){ bd=d; best=c; }
+      if (d < c.r+40 && d < bd){ bd=d; best=c; }
     }
     if (best){
       best.anchor = null; 
@@ -769,8 +874,8 @@ MODULES.colaboracion = {
   
   drag(x,y){ 
     if (this.held){ 
-      this.held.x = constrain(x,80,W-80); 
-      this.held.y = constrain(y,80,H-80); 
+      this.held.x = constrain(x, 80, W-80); 
+      this.held.y = constrain(y, 80, H-80); 
     } 
   },
   
@@ -779,10 +884,11 @@ MODULES.colaboracion = {
     const h = this.held;
     let target=null, bd=Infinity;
     
+    // Buscar otro círculo para unirse
     for (const c of this.circles){
-      if (c===h) continue;
-      const d = dist(h.x,h.y,c.x,c.y);
-      if (d < h.r+c.r+40 && d < bd){ bd=d; target=c; }
+      if (c === h) continue;
+      const d = dist(h.x, h.y, c.x, c.y);
+      if (d < h.r + c.r + 90 && d < bd){ bd=d; target=c; } // Área de enganche generosa
     }
     
     if (target){
@@ -791,47 +897,80 @@ MODULES.colaboracion = {
       h.offX = h.x - rt.x; 
       h.offY = h.y - rt.y; 
     } else {
-      h.vx = (random()<0.5 ? -1 : 1) * random(0.8, 1.5); 
-      h.vy = random(-0.3, 0.3);
+      // Si se suelta en el vacío, vuelve al caos
+      h.vx = random(-6, 6); 
+      h.vy = random(-6, 6);
     }
     this.held = null;
   },
   
   update(){
+    // 1. Calcular el tamaño de cada red para determinar el nivel de "calma"
+    const networks = new Map();
+    for (const c of this.circles){
+      const rt = this.root(c);
+      networks.set(rt, (networks.get(rt) || 0) + 1);
+    }
+    for (const c of this.circles) {
+      c.netSize = networks.get(this.root(c));
+    }
+
+    // 2. Físicas de movimiento
     for (const c of this.circles){
       if (c === this.held) continue;
       
+      const isSolo = c.netSize === 1;
+      
       if (c.anchor){
+        // MODO SEGUIDOR (CALMADO)
         const targetX = c.anchor.x + c.offX;
         const targetY = c.anchor.y + c.offY;
         
-        const ax = (targetX - c.x) * 0.08; 
-        const ay = (targetY - c.y) * 0.08;
+        const spring = 0.04; 
+        const ax = (targetX - c.x) * spring; 
+        const ay = (targetY - c.y) * spring;
         
-        c.vx = (c.vx + ax) * 0.75; 
-        c.vy = (c.vy + ay) * 0.75;
+        c.vx = (c.vx + ax) * 0.85; // Fricción alta para fluidez
+        c.vy = (c.vy + ay) * 0.85;
         
         c.x += c.vx;
         c.y += c.vy;
+
       } else {
+        // MODO RAÍZ O SOLITARIO
+        if (isSolo) {
+          // CAOS: Movimiento errático y nervioso
+          c.vx += random(-1.2, 1.2);
+          c.vy += random(-1.2, 1.2);
+          
+          const maxSpeed = 8;
+          const speed = Math.hypot(c.vx, c.vy);
+          if (speed > maxSpeed) { 
+            c.vx = (c.vx / speed) * maxSpeed; 
+            c.vy = (c.vy / speed) * maxSpeed; 
+          }
+        } else {
+          // CALMA: Deriva lenta y pacífica del grupo
+          c.vx += random(-0.06, 0.06);
+          c.vy += random(-0.06, 0.06);
+          
+          // Frenado constante
+          c.vx *= 0.94;
+          c.vy *= 0.94;
+        }
+
         c.x += c.vx; 
         c.y += c.vy;
-        
-        if (c.y < 120 || c.y > H-120) c.vy *= -1;
-        
-        if ((c.vx > 0 && c.x > W + c.r) || (c.vx < 0 && c.x < -c.r)) {
-          for (const follower of this.circles) {
-            if (follower.anchor === c) {
-              follower.anchor = null;
-              follower.vx = c.vx;
-              follower.vy = c.vy;
-            }
-          }
-          Object.assign(c, this.spawnCircle(c.vx > 0 ? 1 : -1));
-        }
       }
+      
+      // Rebotar en los bordes de la pantalla
+      if (c.x < c.r) { c.x = c.r; c.vx *= -1; }
+      if (c.x > W - c.r) { c.x = W - c.r; c.vx *= -1; }
+      if (c.y < c.r) { c.y = c.r; c.vy *= -1; }
+      if (c.y > H - c.r) { c.y = H - c.r; c.vy *= -1; }
     }
     
+    // 3. Repulsión entre elementos no conectados
     for (let i=0; i<this.circles.length; i++){
       const a = this.circles[i];
       if (a === this.held) continue;
@@ -839,15 +978,16 @@ MODULES.colaboracion = {
       for (let j=i+1; j<this.circles.length; j++){
         const b = this.circles[j];
         
+        // Si comparten la misma raíz, no se repelen
         if (b === this.held || this.root(a) === this.root(b)) continue;
         
         const dx = b.x - a.x; 
         const dy = b.y - a.y; 
         const d = Math.hypot(dx,dy);
-        const minD = a.r + b.r + 10;
+        const minD = a.r + b.r + 15;
         
         if (d > 0 && d < minD){
-          const force = (minD - d) * 0.03; 
+          const force = (minD - d) * 0.06; 
           const ux = dx / d; 
           const uy = dy / d;
           
@@ -861,10 +1001,17 @@ MODULES.colaboracion = {
   draw(){
     drawDynamicBackground();
     
-    strokeWeight(2);
+    // Dibujar los enlaces de colaboración
     for (const c of this.circles) {
       if (c.anchor) {
-        stroke(255, 255, 255, 40); 
+        // Si lograron la colaboración total, el lazo es más grueso y brillante
+        if (c.netSize === this.n) {
+          stroke(255, 255, 255, 140); 
+          strokeWeight(6);
+        } else {
+          stroke(255, 255, 255, 50); 
+          strokeWeight(2);
+        }
         line(c.x, c.y, c.anchor.x, c.anchor.y);
       }
     }
@@ -872,7 +1019,22 @@ MODULES.colaboracion = {
     noStroke();
     for (const c of this.circles){
       fill(PAL.presente[c.colorIdx]);
-      circle(c.x,c.y,c.r*2);
+      
+      const isSolo = c.netSize === 1;
+      const rt = this.root(c);
+      
+      let visualPulse = 0;
+      
+      if (isSolo) {
+        // Latido rápido y desincronizado (Taquicardia caótica)
+        visualPulse = sin(millis() * 0.02 + c.id * 15) * 4;
+      } else {
+        // Respiración lenta y profunda en grupo
+        const calmPace = map(c.netSize, 2, this.n, 0.003, 0.0015);
+        visualPulse = sin(millis() * calmPace + rt.id * 20) * 12;
+      }
+      
+      circle(c.x, c.y, (c.r + visualPulse) * 2);
     }
   }
 };
@@ -994,15 +1156,32 @@ MODULES.ansiedad = {
     this.trembling = false; 
     this.settleTimer = 0;
     this.noiseOffset = random(1000); 
+    this.currentScale = 1.0; 
     this.spawnGhosts();
   },
   
   spawnGhosts(){
     this.ghosts = [];
+    const minSpawnDist = 700; 
+    
     for (let i=0; i<this.nGhosts; i++) {
+      let spawnX, spawnY;
+      let validPosition = false;
+      let attempts = 0;
+      
+      while (!validPosition && attempts < 50) {
+        spawnX = random(200, W-200);
+        spawnY = random(220, H-220);
+        
+        if (dist(spawnX, spawnY, this.tri.x, this.tri.y) > minSpawnDist) {
+          validPosition = true;
+        }
+        attempts++;
+      }
+      
       this.ghosts.push({ 
-        x: random(200, W-200), 
-        y: random(220, H-220),
+        x: spawnX, 
+        y: spawnY,
         phase: random(TWO_PI), 
         alpha: 0               
       });
@@ -1010,7 +1189,8 @@ MODULES.ansiedad = {
   },
   
   press(x,y){ 
-    if (dist(x,y,this.tri.x,this.tri.y) < this.size + 40) {
+    const hitSize = this.size * this.currentScale;
+    if (dist(x,y,this.tri.x,this.tri.y) < hitSize + 40) {
       this.dragging = true; 
       this.tri.tx = x; 
       this.tri.ty = y;
@@ -1043,6 +1223,7 @@ MODULES.ansiedad = {
 
     const nd = this.nearestGhostDist();
     const nearGhost = nd < this.arriveDist;
+    
     if (this.dragging || nearGhost) this.trembling = true;
 
     this.noiseOffset += 0.4; 
@@ -1056,6 +1237,10 @@ MODULES.ansiedad = {
       this.tri.jx = lerp(this.tri.jx, 0, 0.1); 
       this.tri.jy = lerp(this.tri.jy, 0, 0.1); 
     }
+
+    // Lógica de crecimiento
+    const targetScale = constrain(map(nd, 0, 800, 1.7, 1.0), 1.0, 1.7);
+    this.currentScale = lerp(this.currentScale, targetScale, 0.08);
 
     for (const g of this.ghosts) {
       g.phase += 0.04;
@@ -1089,63 +1274,77 @@ MODULES.ansiedad = {
       this.drawTri(g.x, g.y, this.size * scaleBreath);
     }
     
+    const currentTriSize = this.size * this.currentScale;
+    
     if (this.trembling) {
       fill(PAL.futuro[2]); 
       drawingContext.globalAlpha = 0.4;
-      this.drawTri(this.tri.x - this.tri.jx * 1.5, this.tri.y - this.tri.jy * 1.5, this.size);
+      this.drawTri(this.tri.x - this.tri.jx * 1.5, this.tri.y - this.tri.jy * 1.5, currentTriSize);
       drawingContext.globalAlpha = 1.0; 
     }
     
     fill(PAL.futuro[1]);
-    this.drawTri(this.tri.x + this.tri.jx, this.tri.y + this.tri.jy, this.size);
+    this.drawTri(this.tri.x + this.tri.jx, this.tri.y + this.tri.jy, currentTriSize);
   }
 };
 
 /* ---------- FUTURO: EXPECTATIVA ---------- */
 MODULES.expectativa = {
   n: 12, baseRadius: 380, centerSize: 220, satSize: 95,
+  
   reset(){
     this.touching = false;
-    this.rotProg = 0; this.distProg = 0;
+    this.rotProg = 0; 
+    this.distProg = 0;
     this.tris = [];
-    for (let i=0;i<this.n;i++){
+    for (let i=0; i<this.n; i++){
       const angle = (TWO_PI/this.n)*i - HALF_PI;
-      this.tris.push({ angle, sizeVar: random(0.75,1.15) });
+      this.tris.push({ angle }); 
     }
   },
+  
   press(x,y){ this.touching = true; },
   drag(x,y){ this.touching = true; },
   release(){ this.touching = false; },
+  
   update(){
     const target = this.touching ? 1 : 0;
-    this.rotProg = lerp(this.rotProg, target, 0.15);
-    this.distProg = lerp(this.distProg, target, 0.02);
+    this.rotProg = lerp(this.rotProg, target, 0.15); 
+    this.distProg = lerp(this.distProg, target, 0.015); 
   },
+  
   draw(){
     drawDynamicBackground();
-    const cx=W/2, cy=H/2;
+    const cx = W/2, cy = H/2;
     noStroke();
-    const minR = this.centerSize*0.5;
+    
+    const minR = this.centerSize * 0.95; 
+    
     for (const t of this.tris){
       const r = lerp(this.baseRadius, minR, this.distProg);
       const x = cx + cos(t.angle)*r;
       const y = cy + sin(t.angle)*r;
+      
       const outwardRot = t.angle + HALF_PI;
       const rot = outwardRot + PI*this.rotProg; 
-      push(); translate(x,y); rotate(rot);
-      fill(PAL.futuro[2]);
-      const s = this.satSize * t.sizeVar;
-      triangle(0,-s*0.6, -s*0.55,s*0.5, s*0.55,s*0.5);
+      
+      push(); 
+      translate(x,y); 
+      rotate(rot);
+      fill(102); 
+      const s = this.satSize; 
+      triangle(0, -s*0.6, -s*0.55, s*0.5, s*0.55, s*0.5);
       pop();
     }
-    fill(PAL.futuro[1]);
-    push(); translate(cx,cy);
-    const s=this.centerSize;
-    triangle(0,-s*0.55, -s*0.5,s*0.45, s*0.5,s*0.45);
+    
+    fill(150); 
+    push(); 
+    translate(cx,cy);
+    const s = this.centerSize;
+    triangle(0, -s*0.55, -s*0.5, s*0.45, s*0.5, s*0.45);
     pop();
   }
 };
-
 
 /* ============================ 6. SETUP / DRAW ============================ */
 function setup(){
@@ -1183,12 +1382,37 @@ function draw(){
   if (screenState === 'menu'){
     drawMenu();
   } else {
+    currentDrawingModule = screenState;
     const mod = MODULES[screenState];
-    if (mod.update) mod.update();
-    mod.draw();
+    
+    if (mod && mod.update) mod.update();
+    if (mod && mod.draw) mod.draw();
+    
+    // Dibujamos el título y el botón por encima del módulo
+    drawModuleTitle();
     drawBackButton();
   }
   drawDebugMarker();
+}
+
+function drawModuleTitle() {
+  // Buscamos el nombre del módulo actual en la lista de conceptos
+  const currentConcept = CONCEPTS.find(c => c.id === screenState);
+  
+  if (currentConcept) {
+    push();
+    textAlign(CENTER, TOP);
+    textSize(45);
+    noStroke();
+    
+    // Blanco al 25% de opacidad (60 sobre 255) para que no moleste visualmente
+    fill(255, 60); 
+    
+    // Truco visual: agregamos un espacio entre cada letra para un look más elegante
+    const spacedText = currentConcept.label.split('').join(' '); 
+    text(spacedText, W / 2, 70);
+    pop();
+  }
 }
 
 function drawDebugMarker(){
@@ -1211,18 +1435,27 @@ function buildMenuLayout(){
   menuRects = [];
   const subs = ['pasado','presente','futuro'];
   const colW = W/3;
+  // Calculamos la proporción 16:9 exacta para que el canvas entero encaje
+  const w = 440; 
+  const h = 247.5; 
+  const s = w / W; 
+  
   subs.forEach((sub, colIdx) => {
     const items = CONCEPTS.filter(c => c.sub === sub);
     items.forEach((item, rowIdx) => {
-      const w = colW - 70, h = 220;
-      const x = colIdx*colW + 35;
-      const y = 260 + rowIdx*(h+40);
-      menuRects.push({ id:item.id, label:item.label, sub, x, y, w, h });
+      const x = colIdx * colW + (colW - w)/2;
+      const y = 230 + rowIdx * (h + 30);
+      menuRects.push({ id:item.id, label:item.label, sub, x, y, w, h, s });
     });
   });
 }
 
 function drawMenu(){
+  // --- RESET GLOBAL DE ESTILOS ---
+  // Limpiamos cualquier regla que haya quedado "sucia" del módulo anterior
+  rectMode(CORNER);
+  imageMode(CORNER);
+  
   background(15);
   textAlign(CENTER,CENTER);
 
@@ -1230,29 +1463,57 @@ function drawMenu(){
   const colW = W/3;
   noStroke();
   
-  // Aquí se actualizó para leer la paleta colorida del menú
   subs.forEach(([sub,label], i)=>{
     fill(PAL_MENU[sub][0]);
     textSize(40);
-    text(label, colW*i + colW/2, 160);
+    text(label, colW*i + colW/2, 140);
   });
 
   for (const r of menuRects){
+    const mod = MODULES[r.id];
     const idx = menuRects.filter(m=>m.sub===r.sub).indexOf(r);
+    const menuColor = PAL_MENU[r.sub][idx % PAL_MENU[r.sub].length];
+
+    if (mod) {
+      currentDrawingModule = r.id;
+      if (mod.update) mod.update();
+
+      push();
+      translate(r.x, r.y);
+      scale(r.s);
+      
+      drawingContext.save();
+      fill(255);
+      noStroke();
+      // Aseguramos que la máscara de recorte se dibuje desde la esquina
+      rectMode(CORNER); 
+      rect(0, 0, W, H, 80); 
+      drawingContext.clip();
+      
+      mod.draw(); 
+      
+      drawingContext.restore();
+      pop();
+    }
+
+    noFill();
+    stroke(menuColor);
+    strokeWeight(4);
+    rect(r.x, r.y, r.w, r.h, 80 * r.s); 
     
-    // Aquí también se actualizó para mantener los botones de color
-    fill(PAL_MENU[r.sub][idx % PAL_MENU[r.sub].length]);
+    noStroke();
+    fill(0, 160);
+    const br = 80 * r.s;
+    rect(r.x, r.y + r.h - 40, r.w, 40, 0, 0, br, br);
     
-    rectMode(CORNER);
-    rect(r.x, r.y, r.w, r.h, 20);
     fill(255);
-    textSize(32);
-    text(r.label, r.x + r.w/2, r.y + r.h/2);
+    textSize(18);
+    text(r.label, r.x + r.w/2, r.y + r.h - 20);
   }
 
-  fill(255,180);
-  textSize(24);
-  text('Esperando selección desde la tablet (o clickeá acá para testear)', W/2, 80);
+  fill(255, 120);
+  textSize(22);
+  text('Interactuá en miniatura, o doble toque/clic para ampliar pantalla', W/2, 60);
 }
 </script>
 </body>
