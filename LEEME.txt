@@ -1,0 +1,32 @@
+SISTEMA DE SIGNOS — cómo correrlo
+==================================
+
+Necesitás Node.js instalado en la compu que va a mostrar el sistema
+(la que se conecta al proyector/pantalla).
+
+1) Abrir una terminal en esta carpeta y correr una sola vez:
+     npm install
+
+2) Prender el servidor:
+     node server.js
+
+   La terminal va a mostrar algo como:
+     En esta compu (pantalla de proyección):  http://localhost:8080
+     En la tablet (misma wifi):                http://192.168.0.XX:8080/control.html
+
+3) En la COMPU: abrir http://localhost:8080 en el navegador (ahí se
+   ve el sistema en 1920x1080).
+
+4) En la TABLET: conectarla a la MISMA red wifi que la compu, y abrir
+   en su navegador la dirección que muestra la terminal (control.html).
+
+5) Listo: lo que tocás en la tablet se ve reflejado en la pantalla
+   de la compu.
+
+Para probar sin la tablet: el mouse funciona directo sobre
+http://localhost:8080 (clickear/arrastrar), y las teclas 1-9 saltan
+directo a cada concepto, Esc o B vuelve al menú.
+
+Si el lugar de la muestra NO tiene internet: p5.js se carga desde un
+CDN en la línea <script src="https://cdnjs...">, hay que descargar
+p5.min.js y reemplazar esa línea por el archivo local en display.html.

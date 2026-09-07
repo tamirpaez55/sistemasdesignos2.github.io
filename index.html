@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Sistema de Signos - Pantalla</title>
+<style>
+  html,body{
+    margin:0; padding:0; background:#000; overflow:hidden; height:100%;
+    /* Flexbox para centrar el canvas vertical y horizontalmente */
+    display:flex; justify-content:center; align-items:center; 
+  }
+  #canvasWrap{ /* Ya no necesita position: absolute */ }
+  #linkStatus{position:fixed; bottom:8px; right:12px; font-family:sans-serif; font-size:13px; color:#888; z-index:10;}
+</style>
+</head>
+<body>
+<div id="canvasWrap"></div>
+<div id="linkStatus">conectando con la tablet...</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+<script>
+/* =========================================================================
+   SISTEMA DE SIGNOS — PANTALLA (se abre en la COMPU / proyector)
+   -------------------------------------------------------------------------
+   ESTA es la pantalla que el público ve. Dibuja los 9 conceptos en 1920x1080.
+   La interacción llega desde la tablet (control.html) vía WebSocket, pero
+   también podés tocar/clickear directamente ACÁ con mouse para testear sin
+   la tablet.
+   ========================================================================= */
+
+/* ============================ 1. CONFIG GENERAL ============================ */
+
+const W = 1920;
+const H = 1080;
+
+// Paleta en escala de grises exclusiva para las figuras de los módulos
+const PAL = {
+  pasado:   ['#8C8C8C', '#FFFFFF', '#000000'], // Gris medio, Blanco, Negro
+  presente: ['#B3B3B3', '#FFFFFF', '#4D4D4D'], // Gris claro, Blanco, Gris oscuro
+  futuro:   ['#CCCCCC', '#FFFFFF', '#666666']  // Gris muy claro, Blanco, Gris intermedio
+};
+
+// Paleta original colorida exclusiva para los botones del menú principal
+const PAL_MENU = {
+  pasado:   ['#196C7E', '#57C8D4', '#DA6A2D'],
+  presente: ['#8E34C3', '#C691FF', '#FFBD42'],
+  futuro:   ['#261821', '#991212', '#BC4E44']
+};
+
+const CONCEPTS = [
+  { id:'memoria',       label:'MEMORIA',       sub:'pasado'   },
+  { id:'herencia',      label:'HERENCIA',      sub:'pasado'   },
+  { id:'caducidad',     label:'CADUCIDAD',     sub:'pasado'   },
+  { id:'identidad',     label:'IDENTIDAD',     sub:'presente' },
+  { id:'empatia',       label:'EMPATÍA',       sub:'presente' },
+  { id:'colaboracion',  label:'COLABORACIÓN',  sub:'presente' },
+  { id:'incertidumbre', label:'INCERTIDUMBRE', sub:'futuro'   },
+  { id:'ansiedad',      label:'ANSIEDAD',      sub:'futuro'   },
+  { id:'expectativa',   label:'EXPECTATIVA',   sub:'futuro'   }
+];
+
+/* ========================= 2. CONEXIÓN WEBSOCKET ========================= */
+let ws;
+let lastTouch = null; 
+function connectWS(){
+  ws = new WebSocket('ws://localhost:8080');
+  ws.onopen = () => { document.getElementById('linkStatus').textContent = 'tablet conectada ✓'; };
+  ws.onclose = () => {
+    document.getElementById('linkStatus').textContent = 'sin conexión, reintentando...';
+    setTimeout(connectWS, 1500);
+  };
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'input'){
+      const x = msg.nx * W, y = msg.ny * H;
+      if (msg.kind !== 'release') lastTouch = { x, y, t: millis() }; 
+      if (msg.kind === 'press')   handlePress(x,y);
+      if (msg.kind === 'drag')    handleDrag(x,y);
+      if (msg.kind === 'release') handleRelease();
+    } else if (msg.type === 'nav'){
+      if (msg.action === 'select') goTo(msg.id);
+      if (msg.action === 'back')   goMenu();
+    }
+  };
+}
+connectWS();
+
+/* ===================== 3. NAVEGACIÓN / ESTADO DE PANTALLA ===================== */
+let screenState = 'menu';
+let menuRects = [];
+let backBtn = { x:90, y:90, r:85 }; 
+let bgImages = {}; 
+
+function goTo(id){
+  screenState = id;
+  if (MODULES[id] && MODULES[id].reset) MODULES[id].reset();
+}
+function goMenu(){ screenState = 'menu'; }
+
+function drawDynamicBackground() {
+  if (bgImages[screenState]) {
+    image(bgImages[screenState], 0, 0, W, H);
+  } else {
+    background(20); 
+  }
+}
+
+/* ============================ 4. ENTRADA (INPUT) ============================ */
+function handlePress(x,y){
+  if (x===undefined){ x = mouseX; y = mouseY; }
+  if (screenState === 'menu'){
+    for (const r of menuRects){
+      if (x > r.x && x < r.x+r.w && y > r.y && y < r.y+r.h) goTo(r.id);
+    }
+  } else {
+    if (dist(x,y, backBtn.x, backBtn.y) < backBtn.r){ goMenu(); return; }
+    if (MODULES[screenState] && MODULES[screenState].press) MODULES[screenState].press(x,y);
+  }
+}
+function handleDrag(x,y){
+  if (x===undefined){ x = mouseX; y = mouseY; }
+  if (screenState !== 'menu' && MODULES[screenState] && MODULES[screenState].drag) MODULES[screenState].drag(x,y);
+}
+function handleRelease(){
+  if (screenState !== 'menu' && MODULES[screenState] && MODULES[screenState].release) MODULES[screenState].release();
+}
+
+function mousePressed(){ handlePress(); }
+function mouseDragged(){ handleDrag(); }
+function mouseReleased(){ handleRelease(); }
+
+function keyPressed(){
+  if (key === 'Escape' || key === 'b' || key === 'B'){ goMenu(); return; }
+  const n = parseInt(key);
+  if (!isNaN(n) && n>=1 && n<=9) goTo(CONCEPTS[n-1].id);
+}
+
+/* ======================= 5. LOS 9 MÓDULOS DE CONCEPTOS ======================= */
+const MODULES = {};
+
+/* ---------- PASADO: MEMORIA ---------- */
+MODULES.memoria = {
+  queue: [], exiting: [], pressStart: null, pressPos: null,
+  maxHoldMs: 1500,   
+  sqSize: 110,
+  spacing: 230, marginX: 260, maxSlots: 7, 
+
+  reset(){
+    this.queue = []; this.exiting = []; this.pressStart = null; this.pressPos = null;
+    this.maxSlots = Math.floor((W - this.marginX*2) / this.spacing) + 1;
+  },
+
+  press(x,y){ this.pressStart = millis(); this.pressPos = {x,y}; },
+  drag(x,y){ if (this.pressPos) this.pressPos = {x,y}; },
+  release(){
+    if (this.pressStart === null) return;
+    const held = millis() - this.pressStart;
+    const t = constrain(held / this.maxHoldMs, 0, 1); 
+    this.addSquare(t);
+    this.pressStart = null; this.pressPos = null;
+  },
+
+  addSquare(t){
+    if (this.queue.length >= this.maxSlots){
+      const removed = this.queue.shift(); 
+      this.exiting.push({ x:removed.x, y:removed.y, rot:removed.rot, tone:removed.tone, vx:-11, vrot:-0.05, alpha:255 });
+    }
+    const idx = this.queue.length; 
+    const slot = this.getSlot(idx);
+    this.queue.push({ tone:t, x: slot.x + 260, y: slot.y, rot: slot.rot });
+  },
+
+  getSlot(i){
+    const x = this.marginX + i*this.spacing;
+    const y = H/2 + sin(i*0.9)*60;
+    const rot = sin(i*1.3)*0.18;
+    return {x,y,rot};
+  },
+
+  toneColor(t){
+    const base = color(PAL.pasado[0]);
+    const dark = lerpColor(color(0), base, 0.35);
+    const light = lerpColor(base, color(255), 0.55);
+    return lerpColor(dark, light, t);
+  },
+
+  update(){
+    for (let i=0; i<this.queue.length; i++){
+      const target = this.getSlot(i);
+      const q = this.queue[i];
+      q.x = lerp(q.x, target.x, 0.18);
+      q.y = lerp(q.y, target.y, 0.18);
+      q.rot = lerp(q.rot, target.rot, 0.18);
+    }
+    for (const e of this.exiting){ e.x += e.vx; e.rot += e.vrot; e.alpha -= 8; }
+    this.exiting = this.exiting.filter(e => e.alpha > 0 && e.x > -150);
+  },
+
+  draw(){
+    drawDynamicBackground();
+    noStroke(); rectMode(CENTER);
+
+    for (const e of this.exiting){
+      push(); translate(e.x,e.y); rotate(e.rot);
+      const c = this.toneColor(e.tone); c.setAlpha(e.alpha);
+      fill(c); rect(0,0,this.sqSize,this.sqSize);
+      pop();
+    }
+
+    for (let i=0; i<this.queue.length; i++){
+      const q = this.queue[i];
+      const opacityPct = map(i, 0, max(this.queue.length-1,1), 30, 100);
+      push(); translate(q.x, q.y); rotate(q.rot);
+      const c = this.toneColor(q.tone); c.setAlpha(opacityPct*2.55);
+      fill(c); rect(0,0,this.sqSize,this.sqSize);
+      pop();
+    }
+
+    if (this.pressStart !== null && this.pressPos){
+      const t = constrain((millis()-this.pressStart)/this.maxHoldMs, 0, 1);
+      noFill(); stroke(this.toneColor(t)); strokeWeight(6);
+      circle(this.pressPos.x, this.pressPos.y, 40 + t*140);
+    }
+  }
+};
+
+/* ---------- PASADO: HERENCIA ---------- */
+MODULES.herencia = {
+  cols: [],
+  hybrids: {},
+  baseSize: 130, spacingY: 195, topY: 220, margin: 24, 
+  maxPerCycle: 4,     
+  dragThreshold: 60,  
+  maxDragRange: 380,  
+  activeDrag: null,   
+
+  reset(){
+    const colors = [PAL.pasado[0], PAL.pasado[1], PAL.pasado[2]]; 
+    this.cols = colors.map((colorHex, i) => ({
+      colorHex,
+      squares: [{ x: this.colX(i), y: this.topY, size: this.baseSize, col: color(colorHex) }]
+    }));
+    this.hybrids = {};
+    this.activeDrag = null;
+  },
+
+  colX(i){ const colW = W/3; return colW*i + colW/2; },
+  colFromX(x){ return constrain(Math.floor(x / (W/3)), 0, 2); },
+  getSlot(i, idx){ return { x: this.colX(i), y: this.topY + idx*this.spacingY }; },
+  hybridKey(a,b){ return [a,b].sort().join('-'); },
+
+  sizeFromDelta(deltaY){
+    const t = constrain((deltaY - this.dragThreshold) / this.maxDragRange, 0, 1);
+    return lerp(this.baseSize*0.85, this.baseSize*1.25, t);
+  },
+
+  colorFromCols(startCol, endCol){
+    const c1 = color(this.cols[startCol].colorHex);
+    const c2 = color(this.cols[endCol].colorHex);
+    return lerpColor(c1, c2, startCol === endCol ? 1 : 0.5);
+  },
+
+  press(x,y){
+    this.activeDrag = { startCol: this.colFromX(x), startX:x, startY:y, curX:x, curY:y };
+  },
+  drag(x,y){
+    if (!this.activeDrag) return;
+    this.activeDrag.curX = x; this.activeDrag.curY = y;
+  },
+  release(){
+    if (!this.activeDrag) return;
+    const d = this.activeDrag;
+    const deltaY = d.curY - d.startY;
+    const endCol = this.colFromX(d.curX);
+    if (endCol !== d.startCol){
+      this.addSquare(d.startCol, endCol, max(deltaY,0));
+    } else if (deltaY > this.dragThreshold){
+      this.addSquare(d.startCol, endCol, deltaY);
+    }
+    this.activeDrag = null;
+  },
+
+  addSquare(startCol, endCol, deltaY){
+    const size = this.sizeFromDelta(deltaY);
+    if (startCol === endCol){
+      const dest = this.cols[endCol];
+      const mother = dest.squares[0];
+      dest.squares.push({ x: mother.x, y: mother.y, size, col: color(dest.colorHex) });
+      if (dest.squares.length % this.maxPerCycle === 0){
+        const last = dest.squares.pop();
+        dest.squares.unshift(last);
+      }
+    } else {
+      const key = this.hybridKey(startCol, endCol);
+      if (!this.hybrids[key]) this.hybrids[key] = { x: (this.colX(startCol)+this.colX(endCol))/2, squares: [] };
+      const hy = this.hybrids[key];
+      const finalColor = this.colorFromCols(startCol, endCol);
+      const idx = hy.squares.length; 
+      const slot = { x: hy.x, y: this.topY + idx*this.spacingY };
+      hy.squares.push({ x: slot.x, y: slot.y, size, col: finalColor });
+      if (hy.squares.length % this.maxPerCycle === 0){
+        const last = hy.squares.pop();
+        hy.squares.unshift(last);
+      }
+    }
+  },
+
+  update(){
+    this.cols.forEach((col, i) => {
+      for (let idx=0; idx<col.squares.length; idx++){
+        const target = this.getSlot(i, idx);
+        const q = col.squares[idx];
+        q.x = lerp(q.x, target.x, 0.18);
+        q.y = lerp(q.y, target.y, 0.18);
+      }
+    });
+    Object.values(this.hybrids).forEach((hy) => {
+      for (let idx=0; idx<hy.squares.length; idx++){
+        const target = { x: hy.x, y: this.topY + idx*this.spacingY };
+        const q = hy.squares[idx];
+        q.x = lerp(q.x, target.x, 0.18);
+        q.y = lerp(q.y, target.y, 0.18);
+      }
+    });
+  },
+
+  draw(){
+    drawDynamicBackground();
+    rectMode(CENTER);
+
+    if (this.activeDrag){
+      const d = this.activeDrag;
+      const deltaY = d.curY - d.startY;
+      const endColLive = this.colFromX(d.curX);
+      const liveSize = this.sizeFromDelta(max(deltaY,0));
+      const liveColor = this.colorFromCols(d.startCol, endColLive);
+      noStroke();
+      liveColor.setAlpha(120);
+      fill(liveColor);
+      rect(d.curX, d.curY, liveSize*0.8, liveSize*0.8);
+    }
+
+    this.cols.forEach((col) => {
+      noStroke();
+      for (let idx=col.squares.length-1; idx>=0; idx--){
+        const q = col.squares[idx];
+        fill(q.col);
+        this.drawSquareWithMargin(q);
+      }
+    });
+    
+    Object.values(this.hybrids).forEach((hy) => {
+      noStroke();
+      for (let idx=hy.squares.length-1; idx>=0; idx--){
+        const q = hy.squares[idx];
+        fill(q.col);
+        this.drawSquareWithMargin(q);
+      }
+    });
+  },
+
+  drawSquareWithMargin(q){
+    const s = max(q.size - this.margin, 20);
+    rect(q.x, q.y, s, s);
+  }
+};
+
+/* ---------- PASADO: CADUCIDAD ---------- */
+MODULES.caducidad = {
+  pos: { x:0, y:0 },
+  decayProgress: 0,   
+  pressing: false,
+  breakPoint: 0.55,   
+  diameter: 260,
+  growMs: 5500,       
+  shrinkMs: 8000,     
+  fadeMs: 2200,       
+  fragmentOffsets: null, 
+  fadeState: null,       
+
+  reset(){
+    this.pos = { x: W/2, y: H/2 };
+    this.decayProgress = 0;
+    this.pressing = false;
+    this.fragmentOffsets = null;
+    this.fadeState = null;
+  },
+
+  press(x,y){ this.pressing = true; this.pos = {x,y}; },
+  drag(x,y){ if (this.pressing) this.pos = {x,y}; },
+  release(){ this.pressing = false; },
+
+  generateFragments(){
+    const n = Math.floor(random(6,9));
+    this.fragmentOffsets = [];
+    for (let i=0; i<n; i++){
+      this.fragmentOffsets.push({
+        angle: random(TWO_PI),          
+        angSpeed: random(0.4,1.1) * (random()<0.5 ? -1 : 1), 
+        targetR: random(70,150),        
+        r: 0,                           
+        size: random(0.28, 0.45) * this.diameter 
+      });
+    }
+  },
+
+  rotateFragments(){
+    for (const f of this.fragmentOffsets){
+      f.angle += f.angSpeed * (deltaTime/1000);
+      f.r = lerp(f.r, f.targetR, 0.06);
+    }
+  },
+
+  update(){
+    if (this.fadeState){
+      this.fadeState.t += deltaTime;
+      this.rotateFragments();
+      if (this.fadeState.t >= this.fadeMs) this.reset();
+      return;
+    }
+
+    if (this.pressing){
+      this.decayProgress = min(1, this.decayProgress + deltaTime/this.growMs);
+    } else if (this.decayProgress > 0){
+      this.decayProgress = max(0, this.decayProgress - deltaTime/this.shrinkMs);
+    }
+
+    if (this.decayProgress >= this.breakPoint && !this.fragmentOffsets) this.generateFragments();
+    if (this.decayProgress < this.breakPoint && this.fragmentOffsets) this.fragmentOffsets = null; 
+    if (this.fragmentOffsets) this.rotateFragments();
+
+    if (this.decayProgress >= 1 && !this.fadeState) this.fadeState = { t:0 };
+  },
+
+  draw(){
+    drawDynamicBackground();
+    noStroke();
+    const baseColor = color(PAL.pasado[0]); 
+    const grayColor = color(170);
+
+    if (this.fadeState){
+      const fadeT = constrain(this.fadeState.t / this.fadeMs, 0, 1);
+      const c = color(170); c.setAlpha(255*(1-fadeT));
+      fill(c);
+      for (const f of this.fragmentOffsets){
+        const shrunkSize = f.size * (1-fadeT); 
+        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, shrunkSize);
+      }
+      return;
+    }
+
+    if (this.decayProgress < this.breakPoint || !this.fragmentOffsets){
+      const t = constrain(this.decayProgress / this.breakPoint, 0, 1);
+      const c = color(baseColor); c.setAlpha(lerp(255,90,t));
+      fill(c);
+      circle(this.pos.x, this.pos.y, this.diameter);
+    } else {
+      const t = constrain((this.decayProgress - this.breakPoint) / (1 - this.breakPoint), 0, 1);
+      const mixed = lerpColor(baseColor, grayColor, t);
+      mixed.setAlpha(lerp(90,255,t));
+      fill(mixed);
+      for (const f of this.fragmentOffsets){
+        circle(this.pos.x + cos(f.angle)*f.r, this.pos.y + sin(f.angle)*f.r, f.size);
+      }
+    }
+  }
+};
+
+/* ---------- PRESENTE: IDENTIDAD ---------- */
+MODULES.identidad = {
+  baseR: 70, maxR: 210,
+  ringRadii: [160,220,280],
+  outerR: 340,
+  
+  reset(){
+    this.center = { x:W/2, y:H/2 };
+    this.circle = { x:W/2, y:H/2, r:this.baseR };
+    this.grabbed = false;
+    this.grabDX = 0; this.grabDY = 0;
+    
+    this.rings = this.ringRadii.map(r => ({
+      baseR:r, r, ox:0, oy:0
+    }));
+  },
+  
+  press(x,y){
+    if (dist(x,y,this.circle.x,this.circle.y) <= this.circle.r + 80){
+      this.grabbed = true;
+      this.grabDX = this.circle.x - x;
+      this.grabDY = this.circle.y - y;
+    }
+  },
+  
+  drag(x,y){
+    if (!this.grabbed) return;
+    let nx = x + this.grabDX, ny = y + this.grabDY;
+    const dx = nx-this.center.x, dy = ny-this.center.y;
+    const d = Math.hypot(dx,dy);
+    const maxD = Math.max(this.outerR - this.circle.r, 0);
+    
+    if (d > maxD && d > 0.0001){
+      nx = this.center.x + (dx/d)*maxD;
+      ny = this.center.y + (dy/d)*maxD;
+    }
+    this.circle.x = nx; this.circle.y = ny;
+  },
+  
+  release(){ this.grabbed = false; },
+  
+  update(){
+    if (this.grabbed) this.circle.r = min(this.circle.r + 1, this.maxR);
+    else this.circle.r = lerp(this.circle.r, this.baseR, 0.05);
+
+    {
+      const dx = this.circle.x-this.center.x, dy = this.circle.y-this.center.y;
+      const d = Math.hypot(dx,dy);
+      const maxD = Math.max(this.outerR - this.circle.r, 0);
+      if (d > maxD && d > 0.0001){
+        this.circle.x = this.center.x + (dx/d)*maxD;
+        this.circle.y = this.center.y + (dy/d)*maxD;
+      }
+    }
+
+    for (const ring of this.rings){
+      const rx = this.center.x+ring.ox, ry = this.center.y+ring.oy;
+      const dx = this.circle.x - rx; 
+      const dy = this.circle.y - ry;
+      const d = Math.hypot(dx,dy);
+      const overlap = (d + this.circle.r) - ring.r;
+      
+      if (overlap > 0 && d > 0.001){
+        ring.ox += (dx/d)*overlap*0.5;
+        ring.oy += (dy/d)*overlap*0.5;
+        ring.r  = min(ring.r + overlap*0.3, this.outerR); 
+      }
+
+      {
+        const rd = Math.hypot(ring.ox, ring.oy);
+        if (rd + ring.r > this.outerR){
+          const maxRd = Math.max(this.outerR - ring.r, 0);
+          if (rd > 0.0001){ const s = maxRd/rd; ring.ox *= s; ring.oy *= s; }
+          ring.r = min(ring.r, this.outerR);
+        }
+      }
+
+      ring.ox = lerp(ring.ox, 0, 0.04);
+      ring.oy = lerp(ring.oy, 0, 0.04);
+      ring.r  = lerp(ring.r, ring.baseR, 0.04); 
+    }
+  },
+  
+  draw(){
+    drawDynamicBackground();
+
+    noFill(); stroke(PAL.presente[2]); strokeWeight(6);
+    circle(this.center.x, this.center.y, this.outerR*2);
+
+    for (let i=0;i<this.rings.length;i++){
+      const ring = this.rings[i];
+      stroke(PAL.presente[i % PAL.presente.length]); 
+      strokeWeight(6);
+      circle(this.center.x+ring.ox, this.center.y+ring.oy, ring.r*2);
+    }
+
+    noStroke(); fill(PAL.presente[0]);
+    circle(this.circle.x, this.circle.y, this.circle.r*2);
+  }
+};
+
+/* ---------- PRESENTE: EMPATÍA ---------- */
+MODULES.empatia = {
+  motherD: 380,
+  dotsPerCircle: 12,
+  convergedGap: 210,      
+  travelThreshold: 0.35,  
+  reversalWindow: 450,    
+
+  reset(){
+    this.leftHome  = { x: W/2 - this.motherD, y: H/2 };
+    this.rightHome = { x: W/2 + this.motherD, y: H/2 };
+    this.pos = { left: {...this.leftHome}, right: {...this.rightHome} };
+    this.empathyLevel = 0; 
+    this.pressing = false;
+    this.lastX = null; this.prevSign = null; this.lastReversalTime = 0;
+
+    this.baseColorHex = PAL.presente[1];
+    this.accentA = PAL.presente[0]; 
+    this.accentB = PAL.presente[2]; 
+
+    this.particles = [];
+    
+    const genDots = (hostName, accentColor) => {
+      for (let i=0; i<this.dotsPerCircle; i++){
+        const ang = random(TWO_PI);
+        const rad = random(0, this.motherD*0.4);
+        const homePos = this.pos[hostName];
+        this.particles.push({
+          id: i,
+          home: hostName,      
+          host: hostName,      
+          accent: accentColor,
+          x: homePos.x + cos(ang)*rad,
+          y: homePos.y + sin(ang)*rad,
+          vx: random(-1.2, 1.2),
+          vy: random(-1.2, 1.2),
+          size: random(22, 44), 
+          state: 'floating'     
+        });
+      }
+    };
+    
+    genDots('left', this.accentA);
+    genDots('right', this.accentB);
+  },
+
+  press(x,y){ this.pressing = true; this.lastX = x; this.prevSign = null; },
+  drag(x,y){
+    if (!this.pressing) return;
+    const dx = x - this.lastX;
+    if (Math.abs(dx) > 3){
+      const sign = dx > 0 ? 1 : -1;
+      if (this.prevSign !== null && sign !== this.prevSign) this.lastReversalTime = millis(); 
+      this.prevSign = sign;
+      this.lastX = x;
+    }
+  },
+  release(){ this.pressing = false; },
+
+  update(){
+    const caressing = this.pressing && (millis() - this.lastReversalTime < this.reversalWindow);
+    const target = caressing ? 1 : 0;
+    this.empathyLevel = lerp(this.empathyLevel, target, caressing ? 0.07 : 0.045);
+
+    const leftTargetX  = W/2 - this.convergedGap/2;
+    const rightTargetX = W/2 + this.convergedGap/2;
+    this.pos.left.x  = lerp(this.leftHome.x,  leftTargetX,  this.empathyLevel);
+    this.pos.right.x = lerp(this.rightHome.x, rightTargetX, this.empathyLevel);
+
+    const maxR = this.motherD/2;
+
+    for (let p of this.particles) {
+      const hostCenter = this.pos[p.host];
+      const limit = maxR - p.size/2 - 5;
+
+      if (p.state === 'floating') {
+        p.x += p.vx;
+        p.y += p.vy;
+
+        const dx = p.x - hostCenter.x;
+        const dy = p.y - hostCenter.y;
+        const d = Math.hypot(dx, dy);
+
+        if (d > limit) {
+          const nx = dx / d;
+          const ny = dy / d;
+          
+          p.x = hostCenter.x + nx * limit;
+          p.y = hostCenter.y + ny * limit;
+          
+          const dotProd = p.vx * nx + p.vy * ny;
+          p.vx -= 2 * dotProd * nx;
+          p.vy -= 2 * dotProd * ny;
+          
+          p.vx += random(-0.3, 0.3);
+          p.vy += random(-0.3, 0.3);
+        }
+
+        if (caressing && this.empathyLevel > this.travelThreshold) {
+          if (random() < 0.015 * this.empathyLevel) {
+            p.state = 'traveling';
+            p.host = (p.host === 'left') ? 'right' : 'left';
+          }
+        }
+        
+        if (!caressing && this.empathyLevel < 0.2 && p.host !== p.home) {
+          if (random() < 0.04) {
+            p.state = 'traveling';
+            p.host = p.home;
+          }
+        }
+
+      } else if (p.state === 'traveling') {
+        const tx = hostCenter.x;
+        const ty = hostCenter.y;
+        p.x = lerp(p.x, tx, 0.04);
+        p.y = lerp(p.y, ty, 0.04);
+
+        p.y += sin(millis() * 0.005 + p.id) * 3;
+
+        const d = dist(p.x, p.y, tx, ty);
+        if (d < limit * 0.7) {
+          p.state = 'floating'; 
+          p.vx = random(-1.5, 1.5);
+          p.vy = random(-1.5, 1.5);
+        }
+      }
+    }
+  },
+
+  draw(){
+    drawDynamicBackground();
+    noStroke();
+
+    fill(this.baseColorHex);
+    circle(this.pos.left.x,  this.pos.left.y,  this.motherD);
+    circle(this.pos.right.x, this.pos.right.y, this.motherD);
+
+    for (let p of this.particles) {
+      const c = color(p.accent);
+      const alphaPulse = map(noise(p.x * 0.01, p.y * 0.01, millis() * 0.001), 0, 1, 140, 255);
+      
+      if (p.state === 'traveling') {
+        c.setAlpha(255); 
+      } else {
+        c.setAlpha(alphaPulse);
+      }
+      
+      fill(c);
+      circle(p.x, p.y, p.size);
+    }
+  }
+};
+
+/* ---------- PRESENTE: COLABORACIÓN ---------- */
+MODULES.colaboracion = {
+  n: 9,
+  
+  reset(){
+    this.circles = [];
+    for (let i=0;i<this.n;i++){
+      const c = this.spawnCircle(random()<0.5 ? 1 : -1);
+      c.x = random(c.r, W-c.r);
+      this.circles.push(c);
+    }
+    this.held = null;
+  },
+  
+  spawnCircle(dir){
+    const r = random(60,90);
+    return {
+      x: dir>0 ? -r : W+r, y: random(150,H-150),
+      r, 
+      vx: dir*random(0.8, 1.5), vy: random(-0.3, 0.3),
+      colorIdx: floor(random(PAL.presente.length)),
+      anchor: null, offX:0, offY:0
+    };
+  },
+  
+  root(c){ 
+    while (c.anchor) c = c.anchor; 
+    return c; 
+  },
+  
+  press(x,y){
+    let best=null, bd=Infinity;
+    for (const c of this.circles){
+      const d = dist(x,y,c.x,c.y);
+      if (d < c.r+60 && d < bd){ bd=d; best=c; }
+    }
+    if (best){
+      best.anchor = null; 
+      for (const c of this.circles) if (c.anchor === best) c.anchor = null; 
+      this.held = best;
+      this.held.vx = 0; 
+      this.held.vy = 0;
+    }
+  },
+  
+  drag(x,y){ 
+    if (this.held){ 
+      this.held.x = constrain(x,80,W-80); 
+      this.held.y = constrain(y,80,H-80); 
+    } 
+  },
+  
+  release(){
+    if (!this.held) return;
+    const h = this.held;
+    let target=null, bd=Infinity;
+    
+    for (const c of this.circles){
+      if (c===h) continue;
+      const d = dist(h.x,h.y,c.x,c.y);
+      if (d < h.r+c.r+40 && d < bd){ bd=d; target=c; }
+    }
+    
+    if (target){
+      const rt = this.root(target);
+      h.anchor = rt; 
+      h.offX = h.x - rt.x; 
+      h.offY = h.y - rt.y; 
+    } else {
+      h.vx = (random()<0.5 ? -1 : 1) * random(0.8, 1.5); 
+      h.vy = random(-0.3, 0.3);
+    }
+    this.held = null;
+  },
+  
+  update(){
+    for (const c of this.circles){
+      if (c === this.held) continue;
+      
+      if (c.anchor){
+        const targetX = c.anchor.x + c.offX;
+        const targetY = c.anchor.y + c.offY;
+        
+        const ax = (targetX - c.x) * 0.08; 
+        const ay = (targetY - c.y) * 0.08;
+        
+        c.vx = (c.vx + ax) * 0.75; 
+        c.vy = (c.vy + ay) * 0.75;
+        
+        c.x += c.vx;
+        c.y += c.vy;
+      } else {
+        c.x += c.vx; 
+        c.y += c.vy;
+        
+        if (c.y < 120 || c.y > H-120) c.vy *= -1;
+        
+        if ((c.vx > 0 && c.x > W + c.r) || (c.vx < 0 && c.x < -c.r)) {
+          for (const follower of this.circles) {
+            if (follower.anchor === c) {
+              follower.anchor = null;
+              follower.vx = c.vx;
+              follower.vy = c.vy;
+            }
+          }
+          Object.assign(c, this.spawnCircle(c.vx > 0 ? 1 : -1));
+        }
+      }
+    }
+    
+    for (let i=0; i<this.circles.length; i++){
+      const a = this.circles[i];
+      if (a === this.held) continue;
+      
+      for (let j=i+1; j<this.circles.length; j++){
+        const b = this.circles[j];
+        
+        if (b === this.held || this.root(a) === this.root(b)) continue;
+        
+        const dx = b.x - a.x; 
+        const dy = b.y - a.y; 
+        const d = Math.hypot(dx,dy);
+        const minD = a.r + b.r + 10;
+        
+        if (d > 0 && d < minD){
+          const force = (minD - d) * 0.03; 
+          const ux = dx / d; 
+          const uy = dy / d;
+          
+          a.vx -= ux * force; a.vy -= uy * force;
+          b.vx += ux * force; b.vy += uy * force;
+        }
+      }
+    }
+  },
+  
+  draw(){
+    drawDynamicBackground();
+    
+    strokeWeight(2);
+    for (const c of this.circles) {
+      if (c.anchor) {
+        stroke(255, 255, 255, 40); 
+        line(c.x, c.y, c.anchor.x, c.anchor.y);
+      }
+    }
+    
+    noStroke();
+    for (const c of this.circles){
+      fill(PAL.presente[c.colorIdx]);
+      circle(c.x,c.y,c.r*2);
+    }
+  }
+};
+
+/* ---------- FUTURO: INCERTIDUMBRE ---------- */
+MODULES.incertidumbre = {
+  triangles: [],  
+  tapCount: 0,
+  maxTriangles: 14, 
+
+  styles: [
+    { filled: true,  colorHex: PAL.futuro[2] }, 
+    { filled: true,  colorHex: PAL.futuro[1] }, 
+    { filled: false, colorHex: PAL.futuro[1] }, 
+    { filled: false, colorHex: PAL.futuro[2] }, 
+  ],
+
+  reset(){
+    this.tapCount = 0;
+    this.triangles = [{ 
+      x: W/2, y: H/2, tx: W/2, ty: H/2,
+      size: 0, tsize: 220, 
+      rot: 0, trot: 0, 
+      styleIdx: 0,
+      driftSpeed: random(-0.015, 0.015) 
+    }];
+  },
+
+  press(x,y){
+    this.tapCount++;
+    const target = this.nearestTriangle(x,y);
+    if (!target) return;
+    const action = this.decideAction(this.tapCount);
+    this.applyAction(action, target);
+  },
+  
+  drag(x,y){}, release(){},
+
+  nearestTriangle(x,y){
+    let best=null, bd=Infinity;
+    for (const t of this.triangles){
+      const d = dist(x,y,t.x,t.y);
+      if (d < bd){ bd = d; best = t; }
+    }
+    return best;
+  },
+
+  decideAction(n){
+    const bit1 = (n % 3 === 0) ? 1 : 0;
+    const bit2 = (n % 4 === 0) ? 1 : 0;
+    const bit3 = (n % 7 === 0) ? 1 : 0;
+    const composite = bit1 + bit2*2 + bit3*4; 
+    const table = ['desplazar','duplicar','tamaño','color','duplicar','tamaño','desplazar','color'];
+    return table[composite];
+  },
+
+  applyAction(action, t){
+    if (action === 'duplicar'){
+      if (this.triangles.length >= this.maxTriangles) return;
+      const targetSize = t.tsize * random(0.75, 1.15);
+      
+      this.triangles.push({
+        x: t.x, y: t.y, 
+        tx: t.tx + random(-160, 160), ty: t.ty + random(-160, 160),
+        size: 0, tsize: targetSize, 
+        rot: t.rot, trot: t.rot + random(-2, 2),
+        styleIdx: t.styleIdx,
+        driftSpeed: random(-0.02, 0.02)
+      });
+      
+    } else if (action === 'desplazar'){
+      t.tx = random(180, W-180);
+      t.ty = random(180, H-180);
+      t.trot += random(-PI, PI); 
+      
+    } else if (action === 'tamaño'){
+      const factor = random() < 0.5 ? random(0.6,0.85) : random(1.2,1.6);
+      t.tsize = constrain(t.tsize*factor, 60, 420);
+      
+    } else if (action === 'color'){
+      t.styleIdx = (t.styleIdx+1) % this.styles.length;
+      t.size = t.tsize * 1.3; 
+    }
+  },
+
+  update(){
+    for (const t of this.triangles){
+      t.x = lerp(t.x, t.tx, 0.08);
+      t.y = lerp(t.y, t.ty, 0.08);
+      t.size = lerp(t.size, t.tsize, 0.09);
+      t.rot = lerp(t.rot, t.trot, 0.08);
+
+      t.trot += t.driftSpeed;
+    }
+  },
+
+  draw(){
+    drawDynamicBackground();
+    for (const t of this.triangles){
+      const style = this.styles[t.styleIdx];
+      push();
+      translate(t.x, t.y); rotate(t.rot);
+      if (style.filled){ noStroke(); fill(style.colorHex); }
+      else { noFill(); stroke(style.colorHex); strokeWeight(5); }
+      const s = t.size;
+      triangle(0,-s*0.55, -s*0.5,s*0.45, s*0.5,s*0.45);
+      pop();
+    }
+  }
+};
+
+/* ---------- FUTURO: ANSIEDAD ---------- */
+MODULES.ansiedad = {
+  size: 150, arriveDist: 70, settleFrames: 150, nGhosts: 3, 
+  
+  reset(){
+    this.tri = { x:W/2, y:H/2, tx:W/2, ty:H/2, jx:0, jy:0 };
+    this.dragging = false; 
+    this.trembling = false; 
+    this.settleTimer = 0;
+    this.noiseOffset = random(1000); 
+    this.spawnGhosts();
+  },
+  
+  spawnGhosts(){
+    this.ghosts = [];
+    for (let i=0; i<this.nGhosts; i++) {
+      this.ghosts.push({ 
+        x: random(200, W-200), 
+        y: random(220, H-220),
+        phase: random(TWO_PI), 
+        alpha: 0               
+      });
+    }
+  },
+  
+  press(x,y){ 
+    if (dist(x,y,this.tri.x,this.tri.y) < this.size + 40) {
+      this.dragging = true; 
+      this.tri.tx = x; 
+      this.tri.ty = y;
+    }
+  },
+  
+  drag(x,y){ 
+    if (this.dragging){ 
+      this.tri.tx = x; 
+      this.tri.ty = y; 
+    } 
+  },
+  
+  release(){ this.dragging = false; },
+  
+  nearestGhostDist(){
+    let best = Infinity;
+    for (const g of this.ghosts){ 
+      const d = dist(this.tri.x, this.tri.y, g.x, g.y); 
+      if (d < best) best = d; 
+    }
+    return best;
+  },
+  
+  update(){
+    if (this.dragging) {
+      this.tri.x = lerp(this.tri.x, this.tri.tx, 0.12);
+      this.tri.y = lerp(this.tri.y, this.tri.ty, 0.12);
+    }
+
+    const nd = this.nearestGhostDist();
+    const nearGhost = nd < this.arriveDist;
+    if (this.dragging || nearGhost) this.trembling = true;
+
+    this.noiseOffset += 0.4; 
+    
+    if (this.trembling){
+      const amp = this.dragging ? constrain(map(nd, 0, 700, 18, 2), 2, 18) : 15;
+      
+      this.tri.jx = (noise(this.noiseOffset) - 0.5) * amp * 2; 
+      this.tri.jy = (noise(this.noiseOffset + 100) - 0.5) * amp * 2;
+    } else { 
+      this.tri.jx = lerp(this.tri.jx, 0, 0.1); 
+      this.tri.jy = lerp(this.tri.jy, 0, 0.1); 
+    }
+
+    for (const g of this.ghosts) {
+      g.phase += 0.04;
+      g.alpha = min(g.alpha + 4, 130);
+    }
+
+    if (nearGhost && !this.dragging){
+      this.settleTimer++;
+      if (this.settleTimer > this.settleFrames){
+        this.trembling = false; 
+        this.settleTimer = 0; 
+        this.spawnGhosts();
+      }
+    } else {
+      this.settleTimer = 0;
+    }
+  },
+  
+  drawTri(x,y,s){ 
+    triangle(x, y-s*0.55, x-s*0.5, y+s*0.45, x+s*0.5, y+s*0.45); 
+  },
+  
+  draw(){
+    drawDynamicBackground();
+    noStroke();
+    
+    const ghostColor = color(PAL.futuro[2]);
+    for (const g of this.ghosts) {
+      const scaleBreath = 1 + sin(g.phase) * 0.06;
+      fill(red(ghostColor), green(ghostColor), blue(ghostColor), g.alpha);
+      this.drawTri(g.x, g.y, this.size * scaleBreath);
+    }
+    
+    if (this.trembling) {
+      fill(PAL.futuro[2]); 
+      drawingContext.globalAlpha = 0.4;
+      this.drawTri(this.tri.x - this.tri.jx * 1.5, this.tri.y - this.tri.jy * 1.5, this.size);
+      drawingContext.globalAlpha = 1.0; 
+    }
+    
+    fill(PAL.futuro[1]);
+    this.drawTri(this.tri.x + this.tri.jx, this.tri.y + this.tri.jy, this.size);
+  }
+};
+
+/* ---------- FUTURO: EXPECTATIVA ---------- */
+MODULES.expectativa = {
+  n: 12, baseRadius: 380, centerSize: 220, satSize: 95,
+  reset(){
+    this.touching = false;
+    this.rotProg = 0; this.distProg = 0;
+    this.tris = [];
+    for (let i=0;i<this.n;i++){
+      const angle = (TWO_PI/this.n)*i - HALF_PI;
+      this.tris.push({ angle, sizeVar: random(0.75,1.15) });
+    }
+  },
+  press(x,y){ this.touching = true; },
+  drag(x,y){ this.touching = true; },
+  release(){ this.touching = false; },
+  update(){
+    const target = this.touching ? 1 : 0;
+    this.rotProg = lerp(this.rotProg, target, 0.15);
+    this.distProg = lerp(this.distProg, target, 0.02);
+  },
+  draw(){
+    drawDynamicBackground();
+    const cx=W/2, cy=H/2;
+    noStroke();
+    const minR = this.centerSize*0.5;
+    for (const t of this.tris){
+      const r = lerp(this.baseRadius, minR, this.distProg);
+      const x = cx + cos(t.angle)*r;
+      const y = cy + sin(t.angle)*r;
+      const outwardRot = t.angle + HALF_PI;
+      const rot = outwardRot + PI*this.rotProg; 
+      push(); translate(x,y); rotate(rot);
+      fill(PAL.futuro[2]);
+      const s = this.satSize * t.sizeVar;
+      triangle(0,-s*0.6, -s*0.55,s*0.5, s*0.55,s*0.5);
+      pop();
+    }
+    fill(PAL.futuro[1]);
+    push(); translate(cx,cy);
+    const s=this.centerSize;
+    triangle(0,-s*0.55, -s*0.5,s*0.45, s*0.5,s*0.45);
+    pop();
+  }
+};
+
+
+/* ============================ 6. SETUP / DRAW ============================ */
+function setup(){
+  const c = createCanvas(W,H);
+  c.parent('canvasWrap');
+  scaleCanvasToWindow();
+  buildMenuLayout();
+  for (const key in MODULES) if (MODULES[key].reset) MODULES[key].reset();
+
+  CONCEPTS.forEach((concept, index) => {
+    const num = index + 1;
+    loadImage(`fondo${num}.png`, 
+      (img) => { bgImages[concept.id] = img; }, 
+      (err) => { }
+    );
+  });
+}
+
+function windowResized(){ scaleCanvasToWindow(); }
+
+function scaleCanvasToWindow(){
+  const s = min(windowWidth / W, windowHeight / H);
+  const el = document.querySelector('#canvasWrap canvas');
+  if (!el) return;
+  
+  el.style.width = Math.floor(W * s) + 'px';
+  el.style.height = Math.floor(H * s) + 'px';
+  
+  el.style.transform = 'none';
+  document.getElementById('canvasWrap').style.width = 'auto';
+  document.getElementById('canvasWrap').style.height = 'auto';
+}
+
+function draw(){
+  if (screenState === 'menu'){
+    drawMenu();
+  } else {
+    const mod = MODULES[screenState];
+    if (mod.update) mod.update();
+    mod.draw();
+    drawBackButton();
+  }
+  drawDebugMarker();
+}
+
+function drawDebugMarker(){
+  if (!lastTouch) return;
+  const elapsed = millis() - lastTouch.t;
+  if (elapsed > 800) return;
+  noFill(); stroke(255,220,0, 255*(1-elapsed/800)); strokeWeight(4);
+  circle(lastTouch.x, lastTouch.y, 60);
+}
+
+function drawBackButton(){
+  noStroke(); fill(255,255,255,60);
+  circle(backBtn.x, backBtn.y, backBtn.r*1.4);
+  stroke(255); strokeWeight(6); noFill();
+  line(backBtn.x+15, backBtn.y-18, backBtn.x-15, backBtn.y);
+  line(backBtn.x-15, backBtn.y, backBtn.x+15, backBtn.y+18);
+}
+
+function buildMenuLayout(){
+  menuRects = [];
+  const subs = ['pasado','presente','futuro'];
+  const colW = W/3;
+  subs.forEach((sub, colIdx) => {
+    const items = CONCEPTS.filter(c => c.sub === sub);
+    items.forEach((item, rowIdx) => {
+      const w = colW - 70, h = 220;
+      const x = colIdx*colW + 35;
+      const y = 260 + rowIdx*(h+40);
+      menuRects.push({ id:item.id, label:item.label, sub, x, y, w, h });
+    });
+  });
+}
+
+function drawMenu(){
+  background(15);
+  textAlign(CENTER,CENTER);
+
+  const subs=[['pasado','PASADO'],['presente','PRESENTE'],['futuro','FUTURO']];
+  const colW = W/3;
+  noStroke();
+  
+  // Aquí se actualizó para leer la paleta colorida del menú
+  subs.forEach(([sub,label], i)=>{
+    fill(PAL_MENU[sub][0]);
+    textSize(40);
+    text(label, colW*i + colW/2, 160);
+  });
+
+  for (const r of menuRects){
+    const idx = menuRects.filter(m=>m.sub===r.sub).indexOf(r);
+    
+    // Aquí también se actualizó para mantener los botones de color
+    fill(PAL_MENU[r.sub][idx % PAL_MENU[r.sub].length]);
+    
+    rectMode(CORNER);
+    rect(r.x, r.y, r.w, r.h, 20);
+    fill(255);
+    textSize(32);
+    text(r.label, r.x + r.w/2, r.y + r.h/2);
+  }
+
+  fill(255,180);
+  textSize(24);
+  text('Esperando selección desde la tablet (o clickeá acá para testear)', W/2, 80);
+}
+</script>
+</body>
+</html>

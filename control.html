@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sistema de Signos - Control</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;
+             -webkit-user-select:none;user-select:none;touch-action:none;}
+  #pad{position:absolute;top:0;left:0;width:100%;height:100%;}
+
+  /* estado de conexión: chiquito y discreto, no es un botón ni una opción */
+  #status{position:fixed;top:8px;left:10px;font-family:sans-serif;font-size:11px;
+          color:rgba(255,255,255,0.35);pointer-events:none;z-index:5;}
+
+  /* aviso para girar la tablet, solo aparece si está en vertical */
+  #rotateHint{position:fixed;inset:0;background:#000;color:#fff;font-family:sans-serif;
+              display:none;align-items:center;justify-content:center;text-align:center;
+              font-size:20px;padding:0 40px;z-index:10;}
+  @media (orientation: portrait){ #rotateHint{ display:flex; } }
+</style>
+</head>
+<body>
+<div id="pad"></div>
+<div id="status">conectando...</div>
+<div id="rotateHint">Girá la tablet a horizontal</div>
+
+<script>
+/* =========================================================================
+   SISTEMA DE SIGNOS — CONTROL (se abre en la TABLET)
+   -------------------------------------------------------------------------
+   Esta pantalla NO muestra menú ni botones: es una superficie táctil en
+   blanco de punta a punta. Todo lo que tocás acá se manda como una
+   coordenada NORMALIZADA (0 a 1, según el ancho/alto de la tablet) al
+   servidor, que se la reenvía a display.html (la compu).
+
+   Del lado de la compu, display.html ya sabe interpretar esa coordenada
+   tanto para tocar un botón del menú como para interactuar dentro de un
+   concepto — es la MISMA lógica que usa el mouse ahí. Por eso acá no hace
+   falta dibujar nada: todo lo visual (menú, botón volver, conceptos) vive
+   únicamente en la pantalla de la compu.
+   ========================================================================= */
+
+const padDiv = document.getElementById('pad');
+const statusDiv = document.getElementById('status');
+
+/* ---------- WebSocket: se conecta al mismo server que sirvió esta página ---------- */
+let ws;
+function connectWS(){
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.onopen  = () => { statusDiv.textContent = 'conectado ✓'; };
+  ws.onclose = () => {
+    statusDiv.textContent = 'sin conexión, reintentando...';
+    setTimeout(connectWS, 1500);
+  };
+}
+connectWS();
+function send(msg){ if (ws && ws.readyState===1) ws.send(JSON.stringify(msg)); }
+
+/* ---------- Toda la pantalla es la zona táctil: manda press/drag/release normalizados 0..1 ---------- */
+function normFromEvent(e){
+  const nx = e.clientX / window.innerWidth;
+  const ny = e.clientY / window.innerHeight;
+  return { nx: Math.min(Math.max(nx,0),1), ny: Math.min(Math.max(ny,0),1) };
+}
+padDiv.addEventListener('pointerdown', (e)=>{
+  padDiv.setPointerCapture(e.pointerId);
+  const {nx,ny} = normFromEvent(e);
+  send({ type:'input', kind:'press', nx, ny });
+});
+padDiv.addEventListener('pointermove', (e)=>{
+  if (e.buttons === 0 && e.pointerType !== 'touch') return;
+  const {nx,ny} = normFromEvent(e);
+  send({ type:'input', kind:'drag', nx, ny });
+});
+padDiv.addEventListener('pointerup', ()=>{ send({ type:'input', kind:'release' }); });
+padDiv.addEventListener('pointercancel', ()=>{ send({ type:'input', kind:'release' }); });
+</script>
+</body>
+</html>
